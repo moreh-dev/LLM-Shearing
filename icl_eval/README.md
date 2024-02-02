@@ -6,7 +6,7 @@ git clone https://github.com/EleutherAI/lm-evaluation-harness
 cd lm-evaluation-harness
 pip install -e .
 ```
-After installation, please refer to `run_eval.sh` to check out how to run evaluations with the pruned models and source models. 
+After installation, please refer to `run_eval_new.sh` to check out how to run evaluations with the pruned models and source models. 
 
 ### Metrics for each task
 We use the following metrics for each task:

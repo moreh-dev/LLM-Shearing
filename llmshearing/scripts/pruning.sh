@@ -1,35 +1,35 @@
 # pruning llama2 7b -> 3b or 1.3b
 
 # Please specify the working folder
-PROJ_DIR=/scratch/gpfs/mengzhou/space2/LLM-Shearing
+PROJ_DIR=/home/dongseok/pruning/LLM-Shearing-main
 LAUNCH_SCRIPT=${PROJ_DIR}/llmshearing/scripts/launch.sh
-DATA_DIR=/scratch/gpfs/mengzhou/llm_data/version5-uint16/500b_dedup_4k/for_prune
-OUTPUT_DIR=/scratch/gpfs/mengzhou/space2/out/test_release_pruning_full
+DATA_DIR=/home/share/dataset/pruning/sheared_llama_redpajama
+OUTPUT_DIR=/home/dongseok/pruning/outputs
 TRAIN_SCRIPT=${PROJ_DIR}/llmshearing/train.py
-MODEL_PATH=/projects/DANQIC/mengzhou/LLaMA2
+MODEL_PATH=/home/dongseok/pruning/LLM-Shearing-main/saved_models/from_models
 
 # Specify $PROJ_DIR in scripts/launch.sh and scripts/srun_launch.sh if using slurm
 
 test=False
 
 from_model=7b # source model size
-to_model=2.7b # target model size
+to_model=1.3b # target model size
 config_file=${PROJ_DIR}/llmshearing/configs/llama2/${from_model}.yaml
-path=$MODEL_PATH/mosaic-7B/state_dict.pt
+path=$MODEL_PATH/state_dict.pt
 
 # data setup
 data_local=${DATA_DIR}
 
 # basic setup
-max_seq_len=4096
+max_seq_len=2048
 device_train_microbatch_size=4
 global_train_batch_size=32
-device_eval_batch_size=8
+device_eval_batch_size=2
 
 # learning setup
-lr=1e-4 # learning rate for the main parameters
+lr=5e-5 # learning rate for the main parameters
 max_duration=3200ba # 0.42B tokens
-save_interval=3200ba # save in the end
+save_interval=800ba # save in the end
 t_warmup=320ba # 10% learning rate warmup 
 
 # dynamic loading setup
@@ -55,7 +55,7 @@ eval_interval=50ba # eval every 50 batches and update the loading proportion
 lag_lr=1.0 # learning rate or l0_module
 lagr_warmup=640ba # 20% sparsity warmup
 if [[ $to_model == 1.3b ]]; then
-    target_d_model=2048; target_n_heads=16; target_n_layers=24; target_intermediate_size=5504
+    target_d_model=2000; target_n_heads=20; target_n_layers=20; target_intermediate_size=5504
 elif [[ $to_model == 2.7b ]]; then
     target_d_model=2560; target_n_heads=20; target_n_layers=32; target_intermediate_size=6912
 elif [[ $to_model == 370m ]]; then
@@ -72,14 +72,10 @@ if [[ $test == True ]]; then t=00-01:00:00; else t=00-20:00:00; fi
 # Run in bash, it will automatically use resources available in the current environment
 # composer $TRAIN_SCRIPT \
 
-# Run with slurm    
-sbatch --job-name ${run_name} \
-    --nodes=4 \
-    --gpus-per-node=2 \
-    --mem=512gb \
-    --cpus-per-task=8 \
-    --time $t \
-    $LAUNCH_SCRIPT \
+# Run with slurm
+DATETIME=`date +'date_%y-%m-%d_time_%H-%M-%S'`
+
+composer $PROJ_DIR/llmshearing/train.py \
     $config_file \
     run_name=${run_name} \
     data_local=${data_local} \
@@ -113,4 +109,4 @@ sbatch --job-name ${run_name} \
     train_loader.num_workers=0 \
     train_loader.prefetch_factor=null \
     train_loader.persistent_workers=false \
-    autoresume=false
+    autoresume=false |& tee /home/dongseok/pruning/LLM-Shearing-main/log/prune_3b_to_1.3b_$DATETIME.log sh 

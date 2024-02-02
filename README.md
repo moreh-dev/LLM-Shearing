@@ -1,5 +1,18 @@
 # 🦙 Sheared LLaMA: Accelerating Language Model Pre-training via Structured Pruning
 
+### Quick Start ( A100 ) ###
+
+1. ./llmshearing/scripts 참고. 현재 srun 등을 활용해 multi-node로는 run이 어려워 scripts를 수정하였고, pruning.sh만 참고 하면 된다.
+2. prune 할 모델의 config yaml을 잘 설정해준다. (**주의!! : head_dim (=hddien size // num head)가 pruning후에도 일정하도록 세팅을 해야한다. 정확히는 모르지만 결과적으로 최종모델을 얻을때 에러가 난다. 이는 간접적으로 pruning이 제대로 안된 것임을 가리킬 수 도 있다.)
+
+## 이후부터는 첨부한 run_scripts.txt 파일을 참고
+
+3. huggingface에서 pruning할 모델을 composer로 바꿔준다. 
+4. pruning을 진행
+5. pruning 모델을 hf로 바꾼다
+6. eval을 한다. (lm-harness)
+
+
 🌟 [ArXiv Preprint](https://arxiv.org/abs/2310.06694) | [Blog Post](https://xiamengzhou.github.io/sheared-llama/)  
 
 Base models: [Sheared-LLaMA-1.3B](https://huggingface.co/princeton-nlp/Sheared-LLaMA-1.3B) | [Sheared-LLaMA-2.7B](https://huggingface.co/princeton-nlp/Sheared-LLaMA-2.7B) | [Sheared-Pythia-160m](https://huggingface.co/princeton-nlp/Sheared-Pythia-160m/tree/main)  

@@ -105,6 +105,9 @@ def save_composer_to_hf(composer_model_path, output_path=None, model_config:om =
     print(f"saved hf model to {output_path}")
    
 if __name__ == "__main__":
-    composer_model_path, output_path, other_args = sys.argv[1], sys.argv[2], sys.argv[3:]
+    composer_model_path, output_path, reverse, other_args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
     cli_cfg = om.from_cli(other_args)
-    save_composer_to_hf(composer_model_path, output_path, cli_cfg)
+    if reverse == 'True':
+        save_composer_to_hf(composer_model_path, output_path, cli_cfg)
+    else:
+        save_hf_to_composer(composer_model_path, output_path)
