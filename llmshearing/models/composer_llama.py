@@ -4,10 +4,7 @@ from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from composer.metrics import METRIC_DEFAULT_CTORS
-from composer.metrics.nlp import LanguageCrossEntropy, LanguagePerplexity
-from composer.models.base import ComposerModel
-from composer.utils import dist, get_device, reproducibility
+
 from einops import rearrange
 from omegaconf import DictConfig
 from torch.nn import functional as F
@@ -15,8 +12,7 @@ from transformers.pytorch_utils import (find_pruneable_heads_and_indices,
                                         prune_linear_layer)
 
 from llmshearing.models.l0_module import L0Module
-from llmshearing.models.metrics import DomainCount, DomainLanguageCrossEntropy
-
+from llmshearing.models.metrics import DomainCount, DomainLanguageCrossEntropy, LanguageCrossEntropy, LanguagePerplexity
 
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6, device: Optional[str] = None):
@@ -29,11 +25,16 @@ class LlamaRMSNorm(nn.Module):
         self.weight = torch.nn.Parameter(self.weight.data.mul(hidden_z.squeeze())[remaining_index])
 
     def forward(self, hidden_states, hidden_z=None): 
-        if hidden_z is not None:
-            remaining_index = torch.where(~hidden_z.eq(0))[0]
-            compressed_input = torch.index_select(hidden_states, dim=-1, index=remaining_index)
-        else:
-            compressed_input = hidden_states
+        #if hidden_z is not None:
+            #from loguru import logger
+            #torch.save(hidden_z, 'hidden.pt')
+            #torch.save(~hidden_z.eq(0),'hiddeneq.pt')
+        #    remaining_index = torch.where(~hidden_z.eq(0))[0]
+            #torch.save(remaining_index,'hidden_remaining.pt')
+            #sys.exit()
+        #    compressed_input = torch.index_select(hidden_states, dim=-1, index=remaining_index)
+        #else:
+        compressed_input = hidden_states
         variance = compressed_input.to(torch.float32).pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
             
@@ -46,7 +47,7 @@ class LlamaRMSNorm(nn.Module):
             output = output.mul(hidden_z)
         return output
 
-class ComposerMosaicLlama(ComposerModel):
+class ComposerMosaicLlama(nn.Module):
     """ Llama model with the Composer model interface. """
     def __init__(self, cfg):
         super().__init__()
@@ -77,19 +78,28 @@ class ComposerMosaicLlama(ComposerModel):
         self.model.prune_params(zs)
         
     def get_targets(self, batch):
+        from loguru import logger
+        #logger.info(batch['labels'])
         targets = torch.roll(batch['labels'], shifts=-1)
+        #logger.info(targets.device)
         targets[:, -1] = -100
         return targets
         
     def forward(self, batch):
-        input_ids = batch['input_ids']
+        input_ids = batch['input_ids'].cuda()
         key_padding_mask = batch['attention_mask'].bool(
-        ) if 'attention_mask' in batch else None
+        ).to(input_ids.device) if 'attention_mask' in batch else None
         pruned_steps = batch.get('pruned_steps', None)
+
         if pruned_steps is not None:
             pruned_steps = pruned_steps[0].item()
+            #pruned_steps = pruned_steps.to(input_ids.device)
+        
         zs = {key: batch[key] for key in batch if "_z" in key}
+
+        from loguru import logger
         model_output = self.model(input_ids=input_ids, key_padding_mask=key_padding_mask, pruned_steps=pruned_steps, **zs)
+        
         return model_output
 
     def eval_forward(self, batch, outputs=None):
@@ -98,7 +108,7 @@ class ComposerMosaicLlama(ComposerModel):
     def loss(self, outputs, batch):
         logits = outputs["logits"]
         l0_output = outputs["l0_output"]
-        targets = self.get_targets(batch)
+        targets = self.get_targets(batch).to(logits.device)
 
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
                                    targets.view(-1),
@@ -113,10 +123,14 @@ class ComposerMosaicLlama(ComposerModel):
     def get_metrics(self, is_train=False):
         return self.train_metrics if is_train else self.eval_metrics
 
+    ## used in eval process.
     def update_metric(self, batch, outputs, metric) -> None:
+        from loguru import logger
+        #logger.info(outputs)
         logits = outputs["logits"]
+        metric = metric.to(logits.device)
         if isinstance(metric, DomainLanguageCrossEntropy):
-            targets = self.get_targets(batch)
+            targets = self.get_targets(batch).to(logits.device)
             set_id = self.set_name_to_id[metric.set_name]
             targets[batch["set"] != set_id] = -100
             metric.update(logits, targets)
@@ -127,17 +141,8 @@ class ComposerMosaicLlama(ComposerModel):
             metric.update(selected_sets, idx)
         else:
             logits = logits.view(-1, logits.size(-1))
-            targets = self.get_targets(batch).view(-1)
+            targets = self.get_targets(batch).view(-1).to(logits.device)
             metric.update(logits, targets)
-
-    def add_eval_metrics(self, evaluator):
-        evaluator_metrics = {
-            m: METRIC_DEFAULT_CTORS[m]() for m in evaluator.metric_names
-        }
-        if self.eval_metrics is not None:
-            self.eval_metrics.update(evaluator_metrics)
-        else:
-            self.eval_metrics = evaluator_metrics
 
     def _compute_num_fwd_flops(self):
         # Might not be correct for LLaMA structures
@@ -168,6 +173,9 @@ class LlamaModel(nn.Module):
         super().__init__()
         print(f'Tried to build Llama model with cfg.name={cfg.name}')
         self.cfg = cfg
+
+        self.use_pipeline = cfg.parallel.use_pipeline
+        self.split_layers = cfg.parallel.split_layers
         
         ### added ###
         self.l0_module = None
@@ -181,11 +189,14 @@ class LlamaModel(nn.Module):
         self.embedding_fraction = cfg.get('embedding_fraction', 1)
         assert 0 < self.embedding_fraction <= 1, 'model.embedding_fraction must be between 0 (exclusive) and 1 (inclusive)!'
 
+        ##nn.module_dict
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(cfg.vocab_size, 
                                 cfg.d_model,
                                 device=cfg.init_device),
         })
+
+
         self.transformer.update({
             'blocks':
                 nn.ModuleList([
@@ -308,7 +319,7 @@ class LlamaModel(nn.Module):
             zs_block = self.get_zs_block(zs, b_idx)
             past_key_value = past_key_values[
                 b_idx] if past_key_values is not None else None
-
+            from loguru import logger
             x, past_key_value = block(
                 x,
                 past_key_value=past_key_value,
@@ -320,8 +331,14 @@ class LlamaModel(nn.Module):
                 **zs_block 
             )
 
+            #sys.exit()
+
             if past_key_values is not None:
                 past_key_values[b_idx] = past_key_value
+
+            if self.use_pipeline and b_idx in self.split_layers:
+                #sys.exit()
+                x = torch.moreh.pipeline_assign(x)
 
         x = self.transformer.ln_f(x, hidden_z=zs.get("hidden_z", None))
         logits = self.transformer.output(x)

@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from argparse import Namespace as NS
 from typing import Any, List
 
-from composer.core.time import Time
 
 limit_a, limit_b, epsilon = -.1, 1.1, 1e-6
 
@@ -113,7 +112,7 @@ class Mask(nn.Module):
                 z.append(z_)
             z = torch.stack(z).reshape(*self.mask_output_shape)
         return z
-    
+
     def forward(self):
         print(self.training)
         func = self.sample_z if self.training else self.deterministic_z
@@ -144,7 +143,7 @@ class L0Module(nn.Module):
         # l0 config
         self.pruning_modules = l0_module_cfg.pruning_modules        
         self.start_sparsity = l0_module_cfg.start_sparsity 
-        self.lagrangian_warmup_steps = Time.from_timestring(l0_module_cfg.lagrangian_warmup_steps).value
+        self.lagrangian_warmup_steps = l0_module_cfg.lagrangian_warmup_steps
         self.device = device
         self.eval_target_model = l0_module_cfg.get("eval_target_model", True)
         
@@ -165,6 +164,10 @@ class L0Module(nn.Module):
             self.target_sparsity = 1 - self.prunable_target_model_size / self.prunable_model_size
         else:
             self.target_sparsity = l0_module_cfg.target_sparsity
+
+        print(self.target_sparsity)
+
+       # sys.exit()
 
         print("********** Initializing L0 Module **********") 
         for pruning_module in self.pruning_modules:
@@ -486,9 +489,9 @@ class L0Module(nn.Module):
         return_v = {}
         if self.target_model_info is None:
             lagrangian_loss = _lag_loss(expected_sparsity, target_sparsity, self.lambdas["lambda_1"], self.lambdas["lambda_2"])
-            return_v = {"expected_sparsity": expected_sparsity.item(), "target_sparsity": target_sparsity}
+            return_v = {"expected_sparsity": expected_sparsity, "target_sparsity": target_sparsity}
             for key in expected_sparsitys:
-                return_v[f"expected_{key}_sparsity"] = expected_sparsitys[key].mean().item()
+                return_v[f"expected_{key}_sparsity"] = expected_sparsitys[key].mean()
         else:
             lagrangian_loss = 0
             return_v = {}
@@ -496,9 +499,9 @@ class L0Module(nn.Module):
                 ts = self.get_target_sparsity(pruned_steps, self.masks[pruning_module].target_sparsity)
                 expected_ts = expected_sparsitys[pruning_module] 
                 lagrangian_loss += _lag_loss(expected_ts, ts, self.lambdas[f"lambda_1_{pruning_module}"], self.lambdas[f"lambda_2_{pruning_module}"])
-                expected_ts = expected_ts.mean().item()
+                expected_ts = expected_ts.mean()
                 return_v.update({"expected_{}_sparsity".format(pruning_module): expected_ts, "target_{}_sparsity".format(pruning_module): ts})
-            return_v["expected_sparsity"] = expected_sparsity.item()
+            return_v["expected_sparsity"] = expected_sparsity
             return_v["target_sparsity"] = target_sparsity
 
 
